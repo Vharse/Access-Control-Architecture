@@ -1,0 +1,8 @@
+.git
+.github
+__pycache__
+*.pyc
+*.pem
+.env
+jwt_private.pem
+zt_tests.py

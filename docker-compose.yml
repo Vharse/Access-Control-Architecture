@@ -1,30 +1,34 @@
 services:
   db:
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-app_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-access_control_db}
     volumes:
-      - ./database/init_rls.sql:/docker-entrypoint-initdb.d/init_rls.sql:ro
+      - ./app/database/init_rls.sql:/docker-entrypoint-initdb.d/init_rls.sql:ro
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "app_user", "-d", "access_control_db"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-app_user} -d $${POSTGRES_DB:-access_control_db}"]
+      interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 90s
+    restart: unless-stopped
 
   backend:
     build: .
     ports:
       - "7010:7010"
     environment:
+      - PYTHONPATH=/app
       - POSTGRES_USER=${POSTGRES_USER:-app_user}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_HOST=db
       - POSTGRES_PORT=5432
       - POSTGRES_DB=${POSTGRES_DB:-access_control_db}
     volumes:
-      - ./jwt_public.pem:/app/jwt_public.pem:ro
+      - ./app/jwt_public.pem:/app/jwt_public.pem:ro
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped

@@ -28,80 +28,91 @@ Designed to provide defense-in-depth security, strict cryptographic tenant isola
                                                    │  [RLS Policy Enforced Dynamically]   │
                                                    └──────────────────────────────────────┘
 ```
-**Core Security Matrix**
+Core Security Matrix
 
-**Permissions and boundaries are evaluated at every stage of the request lifecycle:**
+Permissions and boundaries are evaluated at every stage of the request lifecycle:
+1. Role-Based Access Control (RBAC)
 
-# 1. Role-Based Access Control (RBAC)
+    Concept: Rights are assigned based on organizational roles embedded within verified security tokens.
 
-        Concept: Rights are assigned based on organizational roles embedded within verified security tokens.
+    Implementation: User claims specify distinct operational roles (admin, tenant_user, auditor), gating administrative routers (routers/tenants.py) and execution paths.
 
-        Implementation: User claims specify distinct operational roles (admin, tenant_user, auditor), gating administrative routers (routers/tenants.py) and execution paths.
+2.  Attribute-Based Access Control (ABAC)
 
-# 2.  Attribute-Based Access Control (ABAC)
+    Concept: Dynamic evaluation driven by environmental, user, and resource attributes rather than static assignments.
 
-        Concept: Dynamic evaluation driven by environmental, user, and resource attributes rather than static assignments.
+    Implementation: Security dependencies (security/dependencies.py) evaluate dynamic context—such as numeric clearance levels (clearance >= 2), resource tags, and tenant scopes—before permitting access.
 
-        Implementation: Security dependencies (security/dependencies.py) evaluate dynamic context—such as numeric clearance levels (clearance >= 2), resource tags, and tenant scopes—before permitting access.
+3.  Database Row-Level Security (RLS)
 
-# 3.  Database Row-Level Security (RLS)
+    Concept: Storage-engine level firewall enforcing isolation directly at the database tier.
 
-        Concept: Storage-engine level firewall enforcing isolation directly at the database tier.
+    Implementation: database/init_rls.sql forces FORCE ROW LEVEL SECURITY on target tables. Policies match rows against runtime session settings (current_setting('app.current_tenant', true)), transparently dropping unauthorized cross-tenant data even if application queries omit WHERE clauses.
 
-        Implementation: database/init_rls.sql forces FORCE ROW LEVEL SECURITY on target tables. Policies match rows against runtime session settings (current_setting('app.current_tenant', true)), transparently dropping unauthorized cross-tenant data even if application queries omit WHERE clauses.
+4. Asymmetric Cryptography & Hardened JWT Parsing
 
-# 4. Asymmetric Cryptography & Hardened JWT Parsing
+    Concept: Cryptographically verifiable identity claims operating on a Zero Trust trust-boundary model.
 
-        Concept: Cryptographically verifiable identity claims operating on a Zero Trust trust-boundary model.
+    Implementation: Tokens are signed using an offline private key (jwt_private.pem) and verified downstream via an asymmetric public key (jwt_public.pem). Strict checks validate signature, expiration (exp), missing mandatory claims (jti, tenant_id), algorithm downgrades (alg: none), and production scheme expectations (iss/aud).
 
-        Implementation: Tokens are signed using an offline private key (jwt_private.pem) and verified downstream via an asymmetric public key (jwt_public.pem). Strict checks validate signature, expiration (exp), missing mandatory claims (jti, tenant_id), algorithm downgrades (alg: none), and production scheme expectations (iss/aud).
+5.  Graceful Error Handling & Unhandled Exception Shielding
 
-# 5.  Graceful Error Handling & Unhandled Exception Shielding
+    Concept: Prevents worker process crashes and protocol truncation on invalid cryptographic payloads.
 
-        Concept: Prevents worker process crashes and protocol truncation on invalid cryptographic payloads.
+    Implementation: All key loader exceptions and token parsing errors in security/jwt_validator.py are wrapped in standardized HTTP exception responses (HTTP 401/400/500) to shield the Uvicorn worker process.
 
-        Implementation: All key loader exceptions and token parsing errors in security/jwt_validator.py are wrapped in standardized HTTP exception responses (HTTP 401/400/500) to shield the Uvicorn worker process.
-
-# 6.  Least-Privilege & SIEM Audit Logging
-
+6.  Least-Privilege & SIEM Audit Logging
 
 Least-Privilege Runtime: Application connection pools utilize a restricted non-superuser role (app_user), preventing schema-level privilege escalation.
 
 Audit Telemetry: security/audit.py captures unauthorized access attempts, cross-tenant violations, and malformed payload attempts for SIEM ingestion (e.g., Wazuh/Elasticsearch).
 
-```
+
 Zero Trust Test Suite (12 Vectors)
 
-The suite in zt_tests.py verifies all security boundaries against automated attack simulations.
+The suites in tests/whitebox/zt_test.py and tests/blackbox/zt_test.py verify all security boundaries against automated attack simulations.
+
 Test Matrix Summary
 
-Vector	Description	Target Threat / Vulnerability	Expected Response
-1	Authorized Request & RLS Check	Cross-tenant data leakage	HTTP 200 + Correct Tenant Data
-2	Anti-BOLA Cross-Tenant Gate	Broken Object Level Authorization (IDOR)	HTTP 403 Forbidden
-3	Insufficient ABAC Clearance	Privilege Escalation (Low Clearance Tier)	HTTP 403 Forbidden
-4	Temporal Claim Expiration	Replay Attacks with Expired JWTs	HTTP 401 Unauthorized
-5	Cryptographic Signature Tampering	Payload Munge / Cryptographic Spoofing	HTTP 401 Unauthorized
-6	Algorithm Downgrade Attack	alg: "none" Arbitrary Token Bypass	HTTP 401 Unauthorized
-7	Missing Authorization Header	Unauthenticated Access	HTTP 401 / 403
-8	Malformed Auth Scheme Prefix	Non-Standard Prefix Injection	HTTP 401 / 403
-9	RBAC Role Evaluation	Role Mismatch (viewer accessing admin)	Controlled HTTP 403 / 200 Gate
-10	Missing Mandatory Claims	Missing jti or tenant_id claims	HTTP 401 Unauthorized
-11	Malformed UUID Injection	Type Injection in Path & Token UUIDs	HTTP 400 / 401
-12	Issuer / Audience Mismatch	Federated Token Spoofing (iss/aud)	HTTP 401 Unauthorized
+	Vector	Description		Target Threat / Vulnerability			Expected Response
 
+1. Authorized Request & RLS Check	Cross-tenant data leakage			HTTP 200 + Correct Tenant Data
+2. Anti-BOLA Cross-Tenant Gate		Broken Object Level Authorization (IDOR)	HTTP 403 Forbidden
+3. Insufficient ABAC Clearance		Privilege Escalation (Low Clearance Tier)	HTTP 403 Forbidden
+4. Temporal Claim Expiration		Replay Attacks with Expired JWTs		HTTP 401 Unauthorized
+5. Cryptographic Signature Tampering	Payload Munge / Cryptographic Spoofing		HTTP 401 Unauthorized
+6. Algorithm Downgrade Attack		alg: "none" Arbitrary Token Bypass		HTTP 401 Unauthorized
+7. Missing Authorization Header		Unauthenticated Access				HTTP 401 / 403
+8. Malformed Auth Scheme Prefix		Non-Standard Prefix Injection			HTTP 401 / 403
+9. RBAC Role Evaluation			Role Mismatch (viewer accessing admin)		Controlled HTTP 403 / 200 Gate
+10. Missing Mandatory Claims		Missing jti or tenant_id claims			HTTP 401 Unauthorized
+11. Malformed UUID Injection		Type Injection in Path & Token UUIDs		HTTP 400 / 401
+12. Issuer / Audience Mismatch		Federated Token Spoofing (iss/aud)		HTTP 401 Unauthorized
 
-#Project Directory Structure
+```
+Project Directory Structure
 .
-├── app.py                 # FastAPI application entrypoint and middleware registration
-├── config/                # Environment configurations and global settings
-├── database/              # Database connection logic & dynamic RLS initialization scripts
+├── .github/
+│   └── workflows/         # CI/CD DevSecOps automation pipeline & security scripts
+├── app/                   # Core application directory
+│   ├── app.py             # FastAPI application entrypoint and middleware registration
+│   ├── config/            # Environment configurations and global settings
+│   ├── database/          # Database connection logic & dynamic RLS initialization scripts
+│   ├── middleware/        # Tenant context injection, RBAC/ABAC enforcement, and auth hooks
+│   ├── routers/           # Feature-scoped API endpoints (Tenants, Documents)
+│   └── security/          # Core crypto validation, JWT parsing, and security audit loggers
 ├── docker-compose.yml     # Multi-container orchestration (App + Hardened Postgres Engine)
 ├── Dockerfile             # Non-root container build spec for the FastAPI service
-├── env.example            # Required environment configuration template
+├── .dockerignore          # Docker build exclusion definitions
+├── .env                   # Local environment configuration variables
+├── env.example            # Required environment configuration template for local setup
+├── .gitignore             # Git exclusion definitions
 ├── jwt_private.pem        # RSA private key for token generation and signing
 ├── jwt_public.pem         # RSA public key for cryptographic signature validation
-├── middleware/            # Tenant context injection, RBAC/ABAC enforcement, and auth hooks
 ├── requirements.txt       # Python dependency manifest
-├── routers/               # Feature-scoped API endpoints (Tenants, Documents)
-├── security/              # Core crypto validation, JWT parsing, and security audit loggers
-└── zt_tests.py            # 12-vector comprehensive zero-trust integration test suite
+└── tests/                 # Automated Zero Trust test suites
+    ├── blackbox/
+    │   ├── .env.live      # Live environment configuration for black-box penetration testing
+    │   └── zt_test.py     # Production/Staging penetration suite (tests external boundaries & CORS)
+    └── whitebox/
+        └── zt_test.py     # 12-vector zero-trust local integration test suite

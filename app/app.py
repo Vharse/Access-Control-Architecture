@@ -4,6 +4,7 @@ Enforces strict Tenant Context Binding, Path-to-Claim Verification, and RLS inte
 """
 
 import os
+import sys
 import uvicorn
 import uuid
 from typing import Dict, Any
@@ -11,9 +12,8 @@ from fastapi import FastAPI, Depends, HTTPException, status, Path
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-
+from middleware.auth import require_zero_trust
 from database.database import get_db, tenant_context, Base, engine
-from middleware import require_zero_trust
 
 Base.metadata.create_all(bind=engine)
 

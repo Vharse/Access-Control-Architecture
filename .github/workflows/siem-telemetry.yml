@@ -1,0 +1,45 @@
+name: "SIEM Telemetry & Alerting Workflow"
+
+on:
+  workflow_call:
+    secrets:
+      ELASTIC_HOST:
+        required: false
+      ELASTIC_API_KEY:
+        required: false
+      SLACK_WEBHOOK_URL:
+        required: false
+
+jobs:
+  siem-telemetry:
+    name: "Ship Security Events to LOGIX SIEM"
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      ELASTIC_HOST: ${{ secrets.ELASTIC_HOST }}
+      ELASTIC_API_KEY: ${{ secrets.ELASTIC_API_KEY }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    steps:
+      - name: Healthcheck & Ingest Telemetry
+        continue-on-error: true
+        run: |
+          if [ -n "$ELASTIC_HOST" ]; then
+            curl -s --connect-timeout 10 -X POST "$ELASTIC_HOST/devsecops-pipeline-logs/_doc" \
+              -H "Authorization: ApiKey $ELASTIC_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"repository\": \"${{ github.repository }}\", \"actor\": \"${{ github.actor }}\", \"status\": \"Pipeline Run Completed\"}" || echo "SIEM Endpoint unreachable. Non-blocking skip."
+          fi
+
+      - name: Send Slack Notification
+        if: always() && env.SLACK_WEBHOOK_URL != ''
+        continue-on-error: true
+        uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2.1.1
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "*DevSecOps Security Gate Result*: ${{ github.repository }}\n*Triggered by*: `${{ github.actor }}`\n*Status*: `${{ job.status }}`"
+            }
